@@ -19,14 +19,14 @@ import {
   ServerIcon,
   UsersIcon,
 } from "@heroicons/react/24/outline";
-import { useEffect, useState, useMemo, useCallback, useRef } from "react";
+import React, { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useRouter } from "next/router";
 import { CippOffCanvas } from "./CippOffCanvas";
 import { useSettings } from "../../hooks/use-settings";
 import { getCippError } from "../../utils/get-cipp-error";
 import { useQueryClient } from "@tanstack/react-query";
 
-export const CippTenantSelector = (props) => {
+export const CippTenantSelector = React.forwardRef((props, ref) => {
   const { width, allTenants = false, multiple = false, refreshButton, tenantButton } = props;
   //get the current tenant from SearchParams called 'tenantFilter'
   const router = useRouter();
@@ -200,6 +200,7 @@ export const CippTenantSelector = (props) => {
 
   // This effect handles when the URL parameter changes (from deep link or user selection)
   // This is the single source of truth for tenant changes
+  // Supports external hotlinks using customerId (GUID) or initialDomainName in addition to defaultDomainName
   useEffect(() => {
     if (!router.isReady || !tenantList.isSuccess) return;
 
@@ -207,17 +208,35 @@ export const CippTenantSelector = (props) => {
 
     // Only process if we have a URL tenant
     if (urlTenant) {
-      // Find the tenant in our list
-      const matchingTenant = tenantList.data.find(
-        ({ defaultDomainName }) => defaultDomainName === urlTenant
-      );
+      // Find the tenant in our list - try defaultDomainName first, then customerId and initialDomainName
+      const matchingTenant =
+        tenantList.data.find(
+          ({ defaultDomainName }) => defaultDomainName === urlTenant
+        ) ||
+        tenantList.data.find(({ customerId }) => customerId === urlTenant) ||
+        tenantList.data.find(
+          ({ initialDomainName }) => initialDomainName === urlTenant
+        );
 
       if (matchingTenant) {
+        const resolvedDomain = matchingTenant.defaultDomainName;
+
+        // If the URL used a non-default identifier, normalize the URL to use defaultDomainName
+        if (urlTenant !== resolvedDomain) {
+          const query = { ...router.query, tenantFilter: resolvedDomain };
+          router.replace(
+            { pathname: router.pathname, query },
+            undefined,
+            { shallow: true }
+          );
+          return; // The replace will re-trigger this effect with the normalized value
+        }
+
         // Update local state if different
-        if (!currentTenant || urlTenant !== currentTenant.value) {
+        if (!currentTenant || resolvedDomain !== currentTenant.value) {
           setSelectedTenant({
-            value: urlTenant,
-            label: `${matchingTenant.displayName} (${urlTenant})`,
+            value: resolvedDomain,
+            label: `${matchingTenant.displayName} (${resolvedDomain})`,
             addedFields: {
               defaultDomainName: matchingTenant.defaultDomainName,
               displayName: matchingTenant.displayName,
@@ -228,9 +247,9 @@ export const CippTenantSelector = (props) => {
         }
 
         // Update settings if different (null filter in settings-context prevents saving null)
-        if (settings.currentTenant !== urlTenant) {
+        if (settings.currentTenant !== resolvedDomain) {
           settings.handleUpdate({
-            currentTenant: urlTenant,
+            currentTenant: resolvedDomain,
           });
         }
       }
@@ -264,14 +283,20 @@ export const CippTenantSelector = (props) => {
   // We can simplify this effect since we now have the new effect above to handle URL changes
   useEffect(() => {
     if (tenant && tenantList.isSuccess && !currentTenant) {
-      const matchingTenant = tenantList.data.find(
-        ({ defaultDomainName }) => defaultDomainName === tenant
-      );
+      const matchingTenant =
+        tenantList.data.find(
+          ({ defaultDomainName }) => defaultDomainName === tenant
+        ) ||
+        tenantList.data.find(({ customerId }) => customerId === tenant) ||
+        tenantList.data.find(
+          ({ initialDomainName }) => initialDomainName === tenant
+        );
+      const resolvedDomain = matchingTenant?.defaultDomainName;
       setSelectedTenant(
         matchingTenant
           ? {
-              value: tenant,
-              label: `${matchingTenant.displayName} (${tenant})`,
+              value: resolvedDomain,
+              label: `${matchingTenant.displayName} (${resolvedDomain})`,
               addedFields: {
                 defaultDomainName: matchingTenant.defaultDomainName,
                 displayName: matchingTenant.displayName,
@@ -325,6 +350,7 @@ export const CippTenantSelector = (props) => {
           </IconButton>
         )}
         <CippAutoComplete
+          ref={ref}
           disabled={tenantList.isFetching || tenantList.isError}
           isFetching={tenantList.isFetching}
           disableClearable={true}
@@ -396,7 +422,9 @@ export const CippTenantSelector = (props) => {
       />
     </>
   );
-};
+});
+
+CippTenantSelector.displayName = "CippTenantSelector";
 
 CippTenantSelector.propTypes = {
   allTenants: PropTypes.bool,
